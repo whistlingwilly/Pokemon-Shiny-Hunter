@@ -1,0 +1,128 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Get version from tag
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version $VERSION"
+
+      - name: Update APP_VERSION in source
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          (Get-Content shiny_hunter.py) `
+            -replace 'APP_VERSION = ".*"', "APP_VERSION = `"$v`"" |
+            Set-Content shiny_hunter.py
+          Write-Host "APP_VERSION set to $v"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyautogui mss Pillow pynput pyinstaller
+
+      - name: Build exe with PyInstaller
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --onefile `
+            --windowed `
+            --name ShinyHunter `
+            --add-data "updater.py;." `
+            --add-data "assets/zones;assets/zones" `
+            --hidden-import "PIL._tkinter_finder" `
+            --hidden-import "pynput.keyboard._win32" `
+            --hidden-import "pynput.mouse._win32" `
+            --exclude-module numpy `
+            --exclude-module scipy `
+            --exclude-module matplotlib `
+            --exclude-module pandas `
+            --clean `
+            shiny_hunter.py
+
+      - name: Verify exe size
+        shell: pwsh
+        run: |
+          $exe = Get-Item "dist\ShinyHunter.exe"
+          $mb  = [math]::Round($exe.Length / 1MB, 1)
+          Write-Host "ShinyHunter.exe: $mb MB"
+          if ($exe.Length -gt 26214400) {
+            Write-Error "Exe is $mb MB — over GitHub 25MB limit!"
+            exit 1
+          }
+          Write-Host "Size OK for GitHub releases."
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Update version in installer script
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          (Get-Content ShinyHunter_Setup.iss) `
+            -replace '#define AppVersion ".*"', "#define AppVersion `"$v`"" |
+            Set-Content ShinyHunter_Setup.iss
+          Write-Host "Installer version set to $v"
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "installer_output"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "ShinyHunter_Setup.iss"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem "installer_output\ShinyHunterSetup_v*.exe" |
+               Select-Object -First 1
+          if (!$f) { Write-Error "Installer not found"; exit 1 }
+          Write-Host "Installer: $($f.Name)  $([math]::Round($f.Length/1MB,1)) MB"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer_output/ShinyHunterSetup_v*.exe
+          name: "Shiny Hunter v${{ steps.version.outputs.version }}"
+          body: |
+            ## Shiny Hunter v${{ steps.version.outputs.version }}
+
+            ### Install
+            1. Download `ShinyHunterSetup_v${{ steps.version.outputs.version }}.exe` below
+            2. Run it and follow the setup wizard
+            3. Launch from Start Menu or Desktop
+
+            No Python required.
+            The app checks for updates automatically on launch.
+
+            ---
+            [README & setup guide](https://github.com/whistlingwilly/Pokemon-Shiny-Hunter#readme)
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
