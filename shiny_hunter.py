@@ -94,7 +94,7 @@ DEPS_OK = len(MISSING) == 0
 # ═══════════════════════════════════════════════════════════════════
 
 APP_TITLE   = "✨ Shiny Hunter — Universal Edition"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.1"
 SHINY_ODDS  = 8192
 
 BG      = "#0a0a18"
