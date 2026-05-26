@@ -94,7 +94,7 @@ DEPS_OK = len(MISSING) == 0
 # ═══════════════════════════════════════════════════════════════════
 
 APP_TITLE   = "✨ Shiny Hunter — Universal Edition"
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.2"
 SHINY_ODDS  = 8192
 
 BG      = "#0a0a18"
@@ -987,25 +987,37 @@ class HunterLoop:
         self._log("⚠️   SHINY SAFE — game will NOT reset if shiny found")
         self._log("⚠️   Emergency stop: move mouse to top-left corner\n")
 
-        # Split script at the soft-reset key (r)
-        # Everything before 'r' = pick up pokemon + navigate to stats
-        # Everything from 'r' onward = reset + reload back to save point
+        # Split script at the detection marker (if set) or soft-reset key (r)
+        # Everything before the split = pick up pokemon + navigate to stats
+        # Everything from the split onward = reset + reload back to save point
         events = self.recorder.events
-        r_idx  = next((i for i,e in enumerate(events)
-                       if e["key"].lower() == self.reset_key.lower()), None)
-
-        if r_idx is None:
-            # No reset in script — play whole thing then reset manually
-            self._log("ℹ️   No reset key found in script — will soft-reset after each run")
-            pre_reset  = events
-            post_reset = []
-            manual_reset = True
-        else:
-            pre_reset    = events[:r_idx]    # ball → stats
-            post_reset   = events[r_idx:]    # r + reload
+        
+        # Check if detection marker step is set (user-defined detection point)
+        if hasattr(self, 'detection_marker_step') and self.detection_marker_step is not None:
+            split_idx = self.detection_marker_step
+            pre_reset    = events[:split_idx]     # up to detection point
+            post_reset   = events[split_idx:]     # detection point onwards
             manual_reset = False
+            self._log(f"🎯  Using marked detection point at step {split_idx+1}")
             self._log(f"ℹ️   Script split: {len(pre_reset)} steps → shiny check → "
-                      f"{len(post_reset)} steps (reset+reload)")
+                      f"{len(post_reset)} steps (continue+reset)")
+        else:
+            # Fallback to reset key detection
+            r_idx  = next((i for i,e in enumerate(events)
+                           if e["key"].lower() == self.reset_key.lower()), None)
+            
+            if r_idx is None:
+                # No reset in script — play whole thing then reset manually
+                self._log("ℹ️   No reset key found in script — will soft-reset after each run")
+                pre_reset  = events
+                post_reset = []
+                manual_reset = True
+            else:
+                pre_reset    = events[:r_idx]    # ball → stats
+                post_reset   = events[r_idx:]    # r + reload
+                manual_reset = False
+                self._log(f"ℹ️   Script split: {len(pre_reset)} steps → shiny check → "
+                          f"{len(post_reset)} steps (reset+reload)")
 
         time.sleep(1.0)
 
@@ -1518,6 +1530,8 @@ class ShinyHunterApp:
         self._t_start   = None
         self._cur_game  = None
         self._cur_start = None
+        self.detection_marker_timestamp = None  # User-marked detection point
+        self.detection_marker_step = None       # Corresponding step number
 
         os.makedirs(SEQUENCES_DIR, exist_ok=True)
 
@@ -1997,6 +2011,59 @@ class ShinyHunterApp:
         tk.Label(rec_frame, textvariable=self._rec_steps_var,
                  font=FONT_MONO, fg=FG_DIM, bg=BG2).pack()
 
+        # Review & Mark Detection Point
+        review_frame = tk.LabelFrame(outer, text=" 🎯 Review & Mark Detection Point ",
+                                     font=FONT_MONO, bg=BG, fg=GOLD, padx=10, pady=8)
+        review_frame.pack(fill="x", pady=(10,10))
+        
+        tk.Label(review_frame,
+                 text="After recording, playback your sequence and press 'O' when the status screen fully loads.\n"
+                      "This tells the app exactly when to check for shinies.",
+                 font=FONT_MONO, fg=FG_DIM, bg=BG, justify="center").pack(pady=(0,8))
+        
+        playback_btn_row = tk.Frame(review_frame, bg=BG)
+        playback_btn_row.pack()
+        
+        self._review_playback_btn = _btn(playback_btn_row, "▶  Playback Sequence",
+                                        self._review_playback,
+                                        bg="#2a5a2a", padx=12, pady=6, font=FONT_MED,
+                                        state="disabled")
+        self._review_playback_btn.pack(side="left", padx=4)
+        
+        self._clear_marker_btn = _btn(playback_btn_row, "✖  Clear Marker",
+                                     self._clear_detection_marker,
+                                     bg="#5a2a2a", padx=12, pady=6, font=FONT_MED,
+                                     state="disabled")
+        self._clear_marker_btn.pack(side="left", padx=4)
+        
+        # Live playback display
+        live_frame = tk.Frame(review_frame, bg=BG2, relief="solid", bd=1)
+        live_frame.pack(fill="x", pady=8, padx=4)
+        
+        tk.Label(live_frame, text="Live Playback:", font=("Courier New",9,"bold"),
+                 fg=GOLD, bg=BG2, anchor="w").pack(fill="x", padx=6, pady=(4,2))
+        
+        self._live_playback_var = tk.StringVar(value="Press 'Playback Sequence' to start")
+        live_label = tk.Label(live_frame, textvariable=self._live_playback_var,
+                             font=("Courier New",10), fg=GREEN_HI, bg=BG2,
+                             anchor="w", justify="left", height=3)
+        live_label.pack(fill="x", padx=6, pady=(0,4))
+        
+        # Detection marker status
+        marker_status_frame = tk.Frame(review_frame, bg=BG)
+        marker_status_frame.pack(fill="x")
+        
+        tk.Label(marker_status_frame, text="Detection Point:",
+                 font=FONT_MED, fg=FG, bg=BG).pack(side="left", padx=(0,6))
+        
+        self._detection_marker_var = tk.StringVar(value="Not Set")
+        tk.Label(marker_status_frame, textvariable=self._detection_marker_var,
+                 font=("Courier New",10,"bold"), fg="#ff6666", bg=BG).pack(side="left")
+        
+        tk.Label(review_frame,
+                 text="💡 Tip: Press 'O' the moment stars/sprite appear fully rendered on screen",
+                 font=("Courier New",8), fg="#8888aa", bg=BG, justify="center").pack(pady=(6,0))
+
         # Save / Load
         sl_frame = tk.LabelFrame(outer, text=" Save & Load Sequences ",
                                  font=FONT_MONO, bg=BG, fg=FG_DIM, padx=10, pady=8)
@@ -2317,6 +2384,10 @@ class ShinyHunterApp:
             self.hunter.pre_check_wait       = float(self._pre_check_wait_var.get())
             self.hunter.use_sparkle_detection = bool(self._use_sparkle_var.get())
             self.hunter.sparkle_sensitivity   = float(self._sparkle_sens_var.get())
+            # Pass detection marker step if set
+            if hasattr(self, 'detection_marker_step') and self.detection_marker_step is not None:
+                self.hunter.detection_marker_step = self.detection_marker_step
+                self._log(f"🎯  Using detection marker at step {self.detection_marker_step+1}")
             self.hunter.start()
 
         self._countdown(5, _launch)
@@ -2647,6 +2718,7 @@ class ShinyHunterApp:
         self._stop_rec_btn.config(state="disabled")
         if not events:
             self._rec_status_var.set("⚠️  Nothing recorded")
+            self._review_playback_btn.config(state="disabled")
             return
         self._rec_status_var.set(f"✅  Recorded {len(events)} steps")
         self._rec_steps_var.set(f"{len(events)} steps recorded")
@@ -2654,6 +2726,9 @@ class ShinyHunterApp:
         self._update_hunt_seq_bar()
         self._log(f"✅  Recorded {len(events)} steps")
         self._log("    Give it a name and click Save Sequence")
+        self._log("    Or playback to mark detection point")
+        # Enable playback button for review
+        self._review_playback_btn.config(state="normal")
 
     def _refresh_tree(self):
         self._seq_tree.delete(*self._seq_tree.get_children())
@@ -2706,6 +2781,111 @@ class ShinyHunterApp:
              padx=12, pady=6, font=FONT_MED).pack(pady=8)
         popup.bind("<Return>", lambda e: _save())
 
+    def _review_playback(self):
+        """Play back the recorded sequence with live display, allowing user to mark detection point."""
+        if not self.recorder.events:
+            messagebox.showwarning("No Sequence","Record a sequence first.")
+            return
+        
+        self._live_playback_var.set("▶ Starting playback...\nPress 'O' when status screen loads")
+        self._review_playback_btn.config(state="disabled")
+        self._log("▶ Review playback started — Press 'O' to mark detection point")
+        
+        # Flag to track if we're in review mode
+        self._review_mode = True
+        self._review_start_time = time.time()
+        
+        # Bind 'O' key globally during review
+        self.root.bind('o', self._mark_detection_point)
+        self.root.bind('O', self._mark_detection_point)
+        
+        def _playback_thread():
+            try:
+                for i, evt in enumerate(self.recorder.events):
+                    if not self._review_mode:
+                        break
+                    
+                    # Update live display
+                    elapsed = time.time() - self._review_start_time
+                    next_step = f"Step {i+2}/{len(self.recorder.events)}" if i < len(self.recorder.events)-1 else "End"
+                    self.root.after(0, lambda s=i, e=elapsed, n=next_step: 
+                        self._live_playback_var.set(
+                            f"▶ Step {s+1}/{len(self.recorder.events)}: {evt['key'].upper()}\n"
+                            f"  Elapsed: {e:.2f}s | Next: {n}\n"
+                            f"  Press 'O' when status screen fully loads"
+                        ))
+                    
+                    # Execute the keystroke
+                    self.recorder.controller.send_key(evt["key"])
+                    time.sleep(evt["delay"])
+                
+                # Playback complete
+                self.root.after(0, self._finish_review_playback)
+            except Exception as ex:
+                self.root.after(0, lambda: self._log(f"⚠️  Playback error: {ex}"))
+                self.root.after(0, self._finish_review_playback)
+        
+        threading.Thread(target=_playback_thread, daemon=True).start()
+    
+    def _mark_detection_point(self, event=None):
+        """Mark the current timestamp as the detection point."""
+        if not hasattr(self, '_review_mode') or not self._review_mode:
+            return
+        
+        elapsed = time.time() - self._review_start_time
+        self.detection_marker_timestamp = elapsed
+        
+        # Calculate which step this corresponds to
+        cumulative_time = 0.0
+        detection_step = 0
+        for i, evt in enumerate(self.recorder.events):
+            cumulative_time += evt["delay"]
+            if cumulative_time >= elapsed:
+                detection_step = i
+                break
+        
+        self.detection_marker_step = detection_step
+        
+        # Update UI
+        self._detection_marker_var.set(f"✅ {elapsed:.2f}s (step {detection_step+1})")
+        self._detection_marker_var.master.config(fg=GREEN_HI)
+        self._clear_marker_btn.config(state="normal")
+        
+        self._log(f"🎯  Detection point marked at {elapsed:.2f}s (step {detection_step+1}/{len(self.recorder.events)})")
+        self._live_playback_var.set(
+            f"✅ Detection marked at {elapsed:.2f}s\n"
+            f"Step {detection_step+1}/{len(self.recorder.events)}\n"
+            f"Continue playback or stop review..."
+        )
+    
+    def _finish_review_playback(self):
+        """Clean up after review playback."""
+        self._review_mode = False
+        self.root.unbind('o')
+        self.root.unbind('O')
+        self._review_playback_btn.config(state="normal")
+        
+        if hasattr(self, 'detection_marker_timestamp') and self.detection_marker_timestamp is not None:
+            self._live_playback_var.set(
+                f"✅ Review complete\n"
+                f"Detection point: {self.detection_marker_timestamp:.2f}s\n"
+                f"Ready for hunting!"
+            )
+            self._log("✅  Review complete — detection point set")
+        else:
+            self._live_playback_var.set("Review complete (no marker set)")
+            self._log("ℹ️  Review complete — no detection point marked")
+    
+    def _clear_detection_marker(self):
+        """Clear the detection marker."""
+        self.detection_marker_timestamp = None
+        self.detection_marker_step = None
+        self._detection_marker_var.set("Not Set")
+        self._detection_marker_var.master.config(fg="#ff6666")
+        self._clear_marker_btn.config(state="disabled")
+        self._log("✖  Detection marker cleared")
+        self._live_playback_var.set("Press 'Playback Sequence' to mark detection point")
+
     def _save_sequence(self):
         name = self._seq_name_entry.get().strip() or "my_sequence"
         name = name.replace(" ","_").replace("/","_")
@@ -2717,6 +2897,7 @@ class ShinyHunterApp:
             "game":    self._cur_game.name if self._cur_game else "Unknown",
             "starter": self._cur_start.name if self._cur_start else "Unknown",
             "recorded": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "detection_marker": self.detection_marker_timestamp,  # Save marker timestamp
         }
         path = os.path.join(SEQUENCES_DIR, f"{name}.json")
         if self.recorder.save(path, meta):
@@ -2732,6 +2913,36 @@ class ShinyHunterApp:
         if not path:
             return
         if self.recorder.load(path):
+            # Load metadata to restore detection marker
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                meta = data.get("metadata", {})
+                self.detection_marker_timestamp = meta.get("detection_marker")
+                
+                # Recalculate step number from timestamp
+                if self.detection_marker_timestamp is not None:
+                    cumulative_time = 0.0
+                    self.detection_marker_step = 0
+                    for i, evt in enumerate(self.recorder.events):
+                        cumulative_time += evt["delay"]
+                        if cumulative_time >= self.detection_marker_timestamp:
+                            self.detection_marker_step = i
+                            break
+                    
+                    # Update UI
+                    self._detection_marker_var.set(f"✅ {self.detection_marker_timestamp:.2f}s (step {self.detection_marker_step+1})")
+                    self._detection_marker_var.master.config(fg=GREEN_HI)
+                    self._clear_marker_btn.config(state="normal")
+                    self._log(f"🎯  Detection marker loaded: {self.detection_marker_timestamp:.2f}s (step {self.detection_marker_step+1})")
+                else:
+                    self.detection_marker_step = None
+                    self._detection_marker_var.set("Not Set")
+                    self._detection_marker_var.master.config(fg="#ff6666")
+                    self._clear_marker_btn.config(state="disabled")
+            except:
+                pass
+            
             name = Path(path).stem
             self._seq_name_entry.delete(0,"end")
             self._seq_name_entry.insert(0, name)
@@ -2740,6 +2951,8 @@ class ShinyHunterApp:
             self._rec_status_var.set(f"✅  Loaded: {name}  ({len(self.recorder.events)} steps)")
             self._rec_steps_var.set(f"{len(self.recorder.events)} steps")
             self._log(f"📂  Loaded: {path}  ({len(self.recorder.events)} steps)")
+            # Enable playback for review
+            self._review_playback_btn.config(state="normal")
 
     def _browse_sequences(self):
         files = list(Path(SEQUENCES_DIR).glob("*.json")) if os.path.isdir(SEQUENCES_DIR) else []
