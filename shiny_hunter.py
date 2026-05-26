@@ -94,7 +94,7 @@ DEPS_OK = len(MISSING) == 0
 # ═══════════════════════════════════════════════════════════════════
 
 APP_TITLE   = "✨ Shiny Hunter — Universal Edition"
-APP_VERSION = "0.6.2"
+APP_VERSION = "0.6.3"
 SHINY_ODDS  = 8192
 
 BG      = "#0a0a18"
@@ -2801,13 +2801,15 @@ class ShinyHunterApp:
         
         def _playback_thread():
             try:
+                import pyautogui
+                
                 for i, evt in enumerate(self.recorder.events):
                     if not self._review_mode:
                         break
                     
                     # Update live display
                     elapsed = time.time() - self._review_start_time
-                    next_step = f"Step {i+2}/{len(self.recorder.events)}" if i < len(self.recorder.events)-1 else "End"
+                    next_step = f"Step {i+2}/{len(self.recorder.events)}: {self.recorder.events[i+1]['key'].upper()}" if i < len(self.recorder.events)-1 else "End of sequence"
                     self.root.after(0, lambda s=i, e=elapsed, n=next_step: 
                         self._live_playback_var.set(
                             f"▶ Step {s+1}/{len(self.recorder.events)}: {evt['key'].upper()}\n"
@@ -2815,8 +2817,17 @@ class ShinyHunterApp:
                             f"  Press 'O' when status screen fully loads"
                         ))
                     
-                    # Execute the keystroke
-                    self.recorder.controller.send_key(evt["key"])
+                    # Execute the keystroke using pyautogui
+                    try:
+                        pyautogui.press(evt["key"])
+                    except:
+                        # If key name doesn't work, try lowercase
+                        try:
+                            pyautogui.press(evt["key"].lower())
+                        except:
+                            pass
+                    
+                    # Wait for the delay
                     time.sleep(evt["delay"])
                 
                 # Playback complete
